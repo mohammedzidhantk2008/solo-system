@@ -4,9 +4,9 @@ from datetime import datetime, date
 import calendar
 
 # --- PAGE CONFIG ---
-st.set_page_config(page_title="Parent Command Center", page_icon="🛡️", layout="centered")
+st.set_page_config(page_title="The System: Adaptive Command Center", page_icon="🛡️", layout="centered")
 
-# --- DATABASE SETUP & MIGRATION ---
+# --- DATABASE SETUP ---
 def init_db():
     conn = sqlite3.connect("player_system.db")
     c = conn.cursor()
@@ -14,9 +14,16 @@ def init_db():
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT UNIQUE,
+            age INTEGER,
             xp INTEGER
         )
     ''')
+    
+    c.execute("PRAGMA table_info(users)")
+    columns = [col[1] for col in c.fetchall()]
+    if 'age' not in columns:
+        c.execute("ALTER TABLE users ADD COLUMN age INTEGER DEFAULT 6")
+
     c.execute('''
         CREATE TABLE IF NOT EXISTS activity_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -26,12 +33,6 @@ def init_db():
             timestamp TEXT
         )
     ''')
-    # Safely add date_str column if it's missing from an older database version
-    try:
-        c.execute("ALTER TABLE activity_logs ADD COLUMN date_str TEXT")
-    except sqlite3.OperationalError:
-        pass # Column already exists
-        
     conn.commit()
     conn.close()
 
@@ -40,28 +41,28 @@ init_db()
 def get_all_users():
     conn = sqlite3.connect("player_system.db")
     c = conn.cursor()
-    c.execute("SELECT name FROM users")
-    users = [row[0] for row in c.fetchall()]
+    c.execute("SELECT name, age FROM users")
+    users = c.fetchall()
     conn.close()
     return users
 
-def add_user(name):
+def add_user(name, age):
     conn = sqlite3.connect("player_system.db")
     c = conn.cursor()
     try:
-        c.execute("INSERT INTO users (name, xp) VALUES (?, 0)", (name,))
+        c.execute("INSERT INTO users (name, age, xp) VALUES (?, ?, 0)", (name, age))
         conn.commit()
     except sqlite3.IntegrityError:
         pass
     conn.close()
 
-def get_user_xp(name):
+def get_user_data(name):
     conn = sqlite3.connect("player_system.db")
     c = conn.cursor()
-    c.execute("SELECT xp FROM users WHERE name = ?", (name,))
+    c.execute("SELECT age, xp FROM users WHERE name = ?", (name,))
     result = c.fetchone()
     conn.close()
-    return result[0] if result else 0
+    return result if result else (0, 0)
 
 def update_user_xp(name, new_xp):
     conn = sqlite3.connect("player_system.db")
@@ -80,6 +81,15 @@ def log_activity(name, activity):
     conn.commit()
     conn.close()
 
+def has_logged_today(name):
+    conn = sqlite3.connect("player_system.db")
+    c = conn.cursor()
+    today_str = date.today().strftime("%Y-%m-%d")
+    c.execute("SELECT COUNT(*) FROM activity_logs WHERE user_name = ? AND date_str = ?", (name, today_str))
+    count = c.fetchone()[0]
+    conn.close()
+    return count > 0
+
 def get_daily_activity_counts(name):
     conn = sqlite3.connect("player_system.db")
     c = conn.cursor()
@@ -88,126 +98,234 @@ def get_daily_activity_counts(name):
     conn.close()
     return counts
 
-# --- UI: PARENT COMMAND CENTER ---
-st.title("🛡️ Parent Command Center")
-st.write("Manage daily habits, mindset milestones, and track consistency heatmaps.")
-
-# Sidebar Profile Management
-st.sidebar.header("👥 Child Profiles")
-existing_users = get_all_users()
-
-new_child_name = st.sidebar.text_input("Add Child Name:")
-if st.sidebar.button("Create Profile"):
-    if new_child_name:
-        add_user(new_child_name)
-        st.sidebar.success(f"Added {new_child_name}!")
-        st.rerun()
-
-if existing_users:
-    selected_user = st.sidebar.selectbox("Select Active Child:", existing_users)
-    user_xp = get_user_xp(selected_user)
-    current_level = (user_xp // 100) + 1
-
-    st.sidebar.markdown("---")
-    st.sidebar.write(f"**Level:** {current_level} | **XP:** {user_xp}")
-
-    # --- MAIN DASHBOARD TABS ---
-    tab1, tab2 = st.tabs(["✅ Daily Quick Log", "📅 Consistency Heatmap"])
-
-    with tab1:
-        st.subheader(f"Log Activities for: {selected_user}")
-        st.write("Check off completed goals for today to lock in XP and paint the calendar.")
-
-        with st.form("daily_form"):
-            st.markdown("### 🌱 Core Habits")
-            c1 = st.checkbox("🧘‍♂️ Meditation / Focus Exercise (+20 XP)")
-            c2 = st.checkbox("📖 Reading & Expanding Horizons (+30 XP)")
-            
-            st.markdown("### 📐 Math & Logic")
-            c3 = st.checkbox("🔢 Problem Solving / IOQM Prep (+50 XP)")
-
-            st.markdown("### 🧠 Mindset Codex (Stoicism)")
-            c4 = st.checkbox("🛡️ Boss Fight: Overcame a hard obstacle (+40 XP)")
-            c5 = st.checkbox("🤫 Humble Warrior: Did a good deed quietly (+40 XP)")
-
-            submitted = st.form_submit_button("💾 Save Today's Progress")
-
-            if submitted:
-                earned_xp = 0
-                tasks = []
-                if c1: earned_xp += 20; tasks.append("Meditation")
-                if c2: earned_xp += 20; tasks.append("Reading")
-                if c3: earned_xp += 50; tasks.append("Math/IOQM")
-                if c4: earned_xp += 40; tasks.append("Boss Fight")
-                if c5: earned_xp += 40; tasks.append("Humble Warrior")
-
-                if earned_xp > 0:
-                    update_user_xp(selected_user, user_xp + earned_xp)
-                    for t in tasks:
-                        log_activity(selected_user, t)
-                    st.balloons()
-                    st.success(f"Successfully added +{earned_xp} XP for {selected_user}!")
-                    st.rerun()
-                else:
-                    st.warning("⚠️ Please check off at least one activity before saving.")
-
-    with tab2:
-        st.subheader(f"📅 Monthly Consistency Heatmap: {selected_user}")
-        st.write("Darker shades indicate active progress days.")
-
-        now = datetime.now()
-        year, month = now.year, now.month
-        activity_data = get_daily_activity_counts(selected_user)
-
-        cal = calendar.monthcalendar(year, month)
-        month_name = calendar.month_name[month]
-
-        st.markdown(f"### **{month_name} {year}**")
-        
-        cal_html = """
+# --- ADVANCED DYNAMIC DESIGN SYSTEM ---
+def apply_dynamic_theme(age):
+    if age <= 7:
+        # TIER 1: Sleek Orange & Black (Energetic, sharp, not too babyish)
+        theme_css = """
         <style>
-        .heat-cal { width: 100%; border-collapse: collapse; font-family: sans-serif; text-align: center; background-color: #0e1117; color: white; }
-        .heat-cal th { padding: 10px; color: #888; font-size: 14px; }
-        .heat-cal td { padding: 12px; border: 1px solid #262730; font-size: 14px; border-radius: 4px; }
-        .day-box { display: block; width: 30px; height: 30px; line-height: 30px; margin: auto; border-radius: 4px; }
-        .level-0 { background-color: #161b22; color: #8b949e; }
-        .level-1 { background-color: #5c3a21; color: #ffedd5; }
-        .level-2 { background-color: #854d0e; color: #fef08a; font-weight: bold; }
-        .level-high { background-color: #a16207; color: #ffffff; font-weight: bold; border: 1px solid #fde047; }
-        .today-ring { border: 2px solid #ef4444 !important; }
+            @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;700&display=swap');
+            html, body, [class*="css"] { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #121212; color: #f3f4f6; }
+            .stApp { background: linear-gradient(135deg, #0f0f0f 0%, #1c140f 100%); }
+            h1, h2, h3 { font-family: 'Plus Jakarta Sans', sans-serif !important; color: #ff7700 !important; font-weight: 700; }
+            .stButton>button { background: linear-gradient(90deg, #ff7700 0%, #e65c00 100%); color: white; border-radius: 8px; font-weight: 700; border: none; box-shadow: 0 4px 12px rgba(255, 119, 0, 0.3); }
+            div.stCheckbox { background-color: #1a1a1a; padding: 12px 16px; border-radius: 8px; border: 1px solid #332211; margin-bottom: 8px; }
+            div.stCheckbox:hover { border-color: #ff7700; }
         </style>
-        <table class="heat-cal">
-          <tr><th>Mon</th><th>Tue</th><th>Wed</th><th>Thu</th><th>Fri</th><th>Sat</th><th>Sun</th></tr>
         """
+    elif 8 <= age <= 13:
+        # TIER 2: Gaming Indigo
+        theme_css = """
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700&family=Inter:wght@400;600&display=swap');
+            html, body, [class*="css"] { font-family: 'Inter', sans-serif; background-color: #0f172a; color: #f8fafc; }
+            .stApp { background: radial-gradient(circle at top, #1e1b4b 0%, #0f172a 100%); }
+            h1, h2, h3 { font-family: 'Orbitron', sans-serif !important; color: #c084fc !important; }
+            .stButton>button { background: linear-gradient(90deg, #7c3aed 0%, #db2777 100%); color: white; border-radius: 8px; font-weight: 600; }
+            div.stCheckbox { background-color: rgba(30, 41, 59, 0.7); padding: 12px; border-radius: 8px; border: 1px solid #334155; margin-bottom: 8px; }
+        </style>
+        """
+    else:
+        # TIER 3: Elite Minimalist Cyber / JEE Dark Mode
+        theme_css = """
+        <style>
+            @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Plus+Jakarta+Sans:wght@400;600;800&display=swap');
+            html, body, [class*="css"] { font-family: 'Plus Jakarta Sans', sans-serif; background-color: #050505; color: #ededed; }
+            .stApp { background-color: #050505; background-image: radial-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 0); background-size: 24px 24px; }
+            h1, h2, h3 { font-family: 'JetBrains Mono', monospace !important; color: #38bdf8 !important; }
+            .stButton>button { background: #0f172a; color: #38bdf8; border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-weight: 600; border: 1px solid #38bdf8; }
+            .stButton>button:hover { background: #38bdf8; color: #050505; }
+            div.stCheckbox { background-color: #0a0a0a; padding: 14px; border-radius: 8px; border: 1px solid #262626; margin-bottom: 8px; }
+        </style>
+        """
+    st.markdown(theme_css, unsafe_allow_html=True)
 
-        today_str = now.strftime("%Y-%m-%d")
+# --- NAVIGATION PORTAL ---
+st.sidebar.title("🛡️ System Gate")
+portal_mode = st.sidebar.radio("Select Portal:", ["🎮 Child Player Portal", "🔒 Parent Admin Portal"])
+users_list = get_all_users()
 
-        for week in cal:
-            cal_html += "<tr>"
-            for day in week:
-                if day == 0:
-                    cal_html += "<td></td>"
-                else:
-                    date_key = f"{year}-{month:02d}-{day:02d}"
-                    count = activity_data.get(date_key, 0)
-                    
-                    if count == 0:
-                        css_class = "level-0"
-                    elif count <= 2:
-                        css_class = "level-1"
-                    elif count <= 4:
-                        css_class = "level-2"
-                    else:
-                        css_class = "level-high"
-                    
-                    is_today = " today-ring" if date_key == today_str else ""
-                    
-                    cal_html += f'<td><div class="day-box {css_class}{is_today}">{day}</div></td>'
-            cal_html += "</tr>"
+if portal_mode == "🔒 Parent Admin Portal":
+    st.markdown("<style>.stApp { background-color: #0e1117; color: white; }</style>", unsafe_allow_html=True)
+    st.title("🔒 Parent Command Center")
+    st.write("Secure oversight: Manage profiles, update age parameters, and analyze cross-tier consistency.")
+    
+    parent_pin = st.text_input("Enter Parent Admin PIN:", type="password")
+    
+    if parent_pin == "1984":
+        st.success("Access Granted, Architect.")
+        st.markdown("---")
         
-        cal_html += "</table>"
-        st.markdown(cal_html, unsafe_allow_html=True)
-        st.markdown("<br><p style='color: #888; font-size: 12px;'>* Red ring indicates today's date. Brown heat shading reflects activity density.</p>", unsafe_allow_html=True)
+        st.subheader("👥 Manage Child Profiles & Adaptive Ages")
+        with st.form("add_profile_form"):
+            new_name = st.text_input("Child Name:")
+            new_age = st.number_input("Child Age (Controls UI Theme & Unlocks):", min_value=3, max_value=20, value=6)
+            submitted_profile = st.form_submit_button("Create / Update Profile")
+            if submitted_profile and new_name:
+                add_user(new_name, int(new_age))
+                st.success(f"Profile saved for {new_name} (Age: {new_age})!")
+                st.rerun()
+        
+        if users_list:
+            st.markdown("### Active Profiles:")
+            for name, age in users_list:
+                age_val, xp_val = get_user_data(name)
+                st.write(f"- **{name}** | Age Level: {age_val} | Total XP: {xp_val}")
+                
+            st.markdown("---")
+            st.subheader("📊 Analytics & Heatmap Viewer")
+            admin_selected_user = st.selectbox("Select Child to Inspect:", [u[0] for u in users_list])
+            
+            now = datetime.now()
+            year, month = now.year, now.month
+            activity_data = get_daily_activity_counts(admin_selected_user)
+            cal = calendar.monthcalendar(year, month)
+            
+            st.markdown(f"#### Consistency Heatmap for {admin_selected_user}")
+            cal_html = """
+            <style>
+            .heat-cal { width: 100%; border-collapse: collapse; font-family: sans-serif; text-align: center; background-color: #121212; color: white; }
+            .heat-cal th { padding: 8px; color: #888; font-size: 13px; }
+            .heat-cal td { padding: 10px; border: 1px solid #262626; font-size: 13px; border-radius: 4px; }
+            .day-box { display: block; width: 25px; height: 25px; line-height: 25px; margin: auto; border-radius: 4px; }
+            .level-0 { background-color: #1a1a1a; color: #666; }
+            .level-1 { background-color: #ff7700; color: #ffffff; }
+            .level-2 { background-color: #cc5500; color: #ffffff; font-weight: bold; }
+            </style>
+            <table class="heat-cal">
+              <tr><th>Mon</th><th>Tue</th><th>Wed</th><th>Thu</th><th>Fri</th><th>Sat</th><th>Sun</th></tr>
+            """
+            for week in cal:
+                cal_html += "<tr>"
+                for day in week:
+                    if day == 0:
+                        cal_html += "<td></td>"
+                    else:
+                        date_key = f"{year}-{month:02d}-{day:02d}"
+                        count = activity_data.get(date_key, 0)
+                        css_class = "level-0" if count == 0 else ("level-1" if count <= 2 else "level-2")
+                        cal_html += f'<td><div class="day-box {css_class}">{day}</div></td>'
+                cal_html += "</tr>"
+            cal_html += "</table>"
+            st.markdown(cal_html, unsafe_allow_html=True)
+        else:
+            st.info("No profiles found. Create one above.")
+            
+    elif parent_pin != "":
+        st.error("❌ Incorrect PIN.")
+    else:
+        st.info("ℹ️ Enter parent PIN to access administrative management.")
 
-else:
-    st.info("👋 Welcome! Create your first child profile using the sidebar input to get started.")
+elif portal_mode == "🎮 Child Player Portal":
+    if not users_list:
+        st.warning("⚠️ No profiles registered. Ask your parent to configure a profile in the Parent Admin Portal.")
+    else:
+        child_names = [u[0] for u in users_list]
+        selected_child = st.selectbox("Select Your Profile:", child_names)
+        
+        child_age, child_xp = get_user_data(selected_child)
+        apply_dynamic_theme(child_age)
+        
+        current_level = (child_xp // 100) + 1
+        xp_in_level = child_xp % 100
+        
+        st.sidebar.markdown("---")
+        st.sidebar.markdown(f"**Player:** {selected_child}")
+        st.sidebar.markdown(f"**Age Index:** {child_age}")
+        st.sidebar.markdown(f"**Level:** {current_level}")
+        st.sidebar.progress(xp_in_level / 100, text=f"XP: {child_xp}")
+        
+        st.title(f"⚡ System Portal // Operative: {selected_child}")
+        st.markdown("---")
+        
+        already_submitted = has_logged_today(selected_child)
+        
+        if already_submitted:
+            st.success("🎉 **Daily Quests Already Completed Today!**")
+            st.info("You have already locked in your progress for today. Come back tomorrow to keep your streak alive and earn more XP!")
+        else:
+            if child_age <= 7:
+                st.header("🌱 Tier 1: Core Habits & Focus")
+                st.write("Build consistency through daily focus and mindset awareness.")
+                
+                with st.form("tier1_form"):
+                    # Clean specific task names without heavy emoji clutter
+                    c1 = st.checkbox("Meditation: 5-10 Minutes Quiet Focus (+20 XP)")
+                    c2 = st.checkbox("Gratitude: Share One Positive Thought of the Day (+20 XP)")
+                    submitted_t1 = st.form_submit_button("💾 Claim Quests")
+                    
+                    if submitted_t1:
+                        earned = 0
+                        tasks = []
+                        if c1: earned += 20; tasks.append("Meditation")
+                        if c2: earned += 20; tasks.append("Gratitude")
+                        
+                        if earned > 0:
+                            update_user_xp(selected_child, child_xp + earned)
+                            for t in tasks: log_activity(selected_child, t)
+                            st.balloons()
+                            st.success(f"Fantastic! Earned +{earned} XP.")
+                            st.rerun()
+                        else:
+                            st.warning("Check off an activity to claim rewards.")
+                
+                st.markdown("---")
+                st.markdown("🔒 **Tier 2 (Ages 8-13):** *Locked until system age requirement is met.*")
+                st.markdown("🔒 **Tier 3 (Ages 14+):** *Locked until system age requirement is met.*")
+
+            elif 8 <= child_age <= 13:
+                st.header("📚 Tier 2: Expanding Horizons & Logic")
+                st.write("Core Protocol: Cultivate continuous learning, literature immersion, and logical reasoning.")
+                
+                with st.form("tier2_form"):
+                    c1 = st.checkbox("Reading: Read 20 Pages of a Book / Biography (+30 XP)")
+                    c2 = st.checkbox("Logic: Solve a Logic Puzzle or Strategy Challenge (+30 XP)")
+                    submitted_t2 = st.form_submit_button("💾 Claim Quests")
+                    
+                    if submitted_t2:
+                        earned = 0
+                        tasks = []
+                        if c1: earned += 30; tasks.append("Reading Habit")
+                        if c2: earned += 30; tasks.append("Logic Puzzle")
+                        
+                        if earned > 0:
+                            update_user_xp(selected_child, child_xp + earned)
+                            for t in tasks: log_activity(selected_child, t)
+                            st.balloons()
+                            st.success(f"Mission complete! Earned +{earned} XP.")
+                            st.rerun()
+                        else:
+                            st.warning("Check off an activity to claim rewards.")
+                
+                st.markdown("---")
+                st.markdown("✅ **Tier 1:** *Mastered*")
+                st.markdown("🔒 **Tier 3 (Ages 14+):** *Locked until system age requirement is met.*")
+
+            else:
+                st.header("📐 Tier 3: Advanced Architect Protocol & Mindset Codex")
+                st.write("Advanced Directive: High-level problem solving, Stoic resilience, and deep mastery.")
+                
+                with st.form("tier3_form"):
+                    c1 = st.checkbox("Advanced Math: Solve Competitive Problems (+50 XP)")
+                    c2 = st.checkbox("Boss Fight: Overcame a hard obstacle without quitting (+40 XP)")
+                    c3 = st.checkbox("Humble Warrior: Executed a disciplined act quietly (+40 XP)")
+                    submitted_t3 = st.form_submit_button("💾 Commit Progress")
+                    
+                    if submitted_t3:
+                        earned = 0
+                        tasks = []
+                        if c1: earned += 50; tasks.append("Advanced Math")
+                        if c2: earned += 40; tasks.append("Boss Fight")
+                        if c3: earned += 40; tasks.append("Humble Warrior")
+                        
+                        if earned > 0:
+                            update_user_xp(selected_child, child_xp + earned)
+                            for t in tasks: log_activity(selected_child, t)
+                            st.balloons()
+                            st.success(f"Sync successful. Earned +{earned} XP.")
+                            st.rerun()
+                        else:
+                            st.warning("Check off an activity to commit progress.")
+                
+                st.markdown("---")
+                st.markdown("✅ **Tier 1 & Tier 2:** *Mastered & Unlocked*")
