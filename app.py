@@ -6,7 +6,7 @@ import calendar
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="Parent Command Center", page_icon="🛡️", layout="centered")
 
-# --- DATABASE SETUP ---
+# --- DATABASE SETUP & MIGRATION ---
 def init_db():
     conn = sqlite3.connect("player_system.db")
     c = conn.cursor()
@@ -26,6 +26,12 @@ def init_db():
             timestamp TEXT
         )
     ''')
+    # Safely add date_str column if it's missing from an older database version
+    try:
+        c.execute("ALTER TABLE activity_logs ADD COLUMN date_str TEXT")
+    except sqlite3.OperationalError:
+        pass # Column already exists
+        
     conn.commit()
     conn.close()
 
@@ -147,20 +153,17 @@ if existing_users:
 
     with tab2:
         st.subheader(f"📅 Monthly Consistency Heatmap: {selected_user}")
-        st.write("Darker shades indicate active progress days. Matches your consistency tracker.")
+        st.write("Darker shades indicate active progress days.")
 
-        # Render custom calendar heatmap grid matching user's photo reference
         now = datetime.now()
         year, month = now.year, now.month
         activity_data = get_daily_activity_counts(selected_user)
 
-        # Calendar month layout
         cal = calendar.monthcalendar(year, month)
         month_name = calendar.month_name[month]
 
         st.markdown(f"### **{month_name} {year}**")
         
-        # HTML/CSS Table styling for dark theme calendar
         cal_html = """
         <style>
         .heat-cal { width: 100%; border-collapse: collapse; font-family: sans-serif; text-align: center; background-color: #0e1117; color: white; }
@@ -188,7 +191,6 @@ if existing_users:
                     date_key = f"{year}-{month:02d}-{day:02d}"
                     count = activity_data.get(date_key, 0)
                     
-                    # Determine color shade based on activity count
                     if count == 0:
                         css_class = "level-0"
                     elif count <= 2:
