@@ -333,3 +333,131 @@ elif portal_mode == "Student Portal":
             if ref_submitted and reflection_text:
                 save_mindset_reflection(selected_child, reflection_text)
                 st.success("✅ Journal entry saved.")
+                import sqlite3
+import streamlit as st
+
+
+# Initialize database connection for the 45-Day Checklist module
+def init_db():
+  conn = sqlite3.connect("study_tracker.db", check_same_thread=False)
+  cursor = conn.cursor()
+  cursor.execute("""
+        CREATE TABLE IF NOT EXISTS checklist_45days (
+            day_num INTEGER PRIMARY KEY,
+            phase TEXT,
+            schedule_context TEXT,
+            lecture_target TEXT,
+            lectures_done TEXT,
+            questions_done TEXT
+        )
+    """)
+  conn.commit()
+  return conn, cursor
+
+
+# Pre-populate initial structure if empty (matching the 45-day layout)
+def seed_initial_data(cursor, conn):
+  cursor.execute("SELECT COUNT(*) FROM checklist_45days")
+  if cursor.fetchone()[0] == 0:
+    # Phase 1: Days 1 to 21 (Exam Leave)
+    for d in range(1, 22):
+      phase = "Phase 1: Exam Leave (Days 1 - 21)"
+      context = "Exam Leave (Self-Study Hours)"
+      target = "Watch 4 Lectures & Practice Qs"
+      cursor.execute(
+          "INSERT OR IGNORE INTO checklist_45days VALUES (?, ?, ?, ?, ?, ?)",
+          (d, phase, context, target, "", "Pending"),
+      )
+    # Phase 2: Days 22 to 45 (School Reopened)
+    for d in range(22, 46):
+      phase = "Phase 2: School Reopened (Days 22 - 45)"
+      context = (
+          "School Evening Routine"
+          if d % 7 not in [5, 6]
+          else "Weekend Revise/Session"
+      )
+      target = (
+          "Watch 3 Lectures & Practice Qs"
+          if d % 7 not in [5, 6]
+          else "Watch 4 Lectures & Practice Qs"
+      )
+      cursor.execute(
+          "INSERT OR IGNORE INTO checklist_45days VALUES (?, ?, ?, ?, ?, ?)",
+          (d, phase, context, target, "", "Pending"),
+      )
+    conn.commit()
+
+
+def render_45day_checklist_module():
+  st.subheader("📋 45-Day Study Plan Master Checklist")
+  conn, cursor = init_db()
+  seed_initial_data(cursor, conn)
+
+  # Filter by Phase
+  phase_filter = st.selectbox(
+      "Filter Phase",
+      [
+          "All",
+          "Phase 1: Exam Leave (Days 1 - 21)",
+          "Phase 2: School Reopened (Days 22 - 45)",
+      ],
+  )
+
+  if phase_filter == "All":
+    cursor.execute("SELECT * FROM checklist_45days ORDER BY day_num")
+  else:
+    cursor.execute(
+        "SELECT * FROM checklist_45days WHERE phase = ? ORDER BY day_num",
+        (phase_filter,),
+    )
+
+  rows = cursor.fetchall()
+
+  st.markdown("---")
+  for row in rows:
+    day_num, phase, context, target, lectures_done, questions_done = row
+
+    with st.expander(
+        f"Day {day_num} | {context} [{'✅ Done' if questions_done == 'Completed' else '⏳ Pending'}]"
+    ):
+      cols = st.columns([2, 2, 2])
+      with cols[0]:
+        st.write(f"**Phase:** {phase}")
+        st.write(f"**Context:** {context}")
+      with cols[1]:
+        st.write(f"**Target:** {target}")
+        # Multi-select or checkboxes for lectures 1 to 4/6
+        current_done = (
+            [int(x) for x in lectures_done.split(",") if x.isdigit()]
+            if lectures_done
+            else []
+        )
+        selected_lectures = st.multiselect(
+            f"Lectures Done (Day {day_num})",
+            options=[1, 2, 3, 4, 5, 6],
+            default=current_done,
+            key=f"lec_{day_num}",
+        )
+      with cols[2]:
+        q_status = st.selectbox(
+            f"Questions Done (Day {day_num})",
+            ["Pending", "Completed"],
+            index=0 if questions_done != "Completed" else 1,
+            key=f"q_{day_num}",
+        )
+
+        if st.button(f"Save Day {day_num}", key=f"btn_{day_num}"):
+          lectures_str = ",".join(map(str, selected_lectures))
+          cursor.execute(
+              """UPDATE checklist_45days 
+                             SET lectures_done = ?, questions_done = ? 
+                             WHERE day_num = ?""",
+              (lectures_str, q_status, day_num),
+          )
+          conn.commit()
+          st.success(f"Saved Day {day_num} successfully!")
+          st.rerun()
+
+
+# To run this as a standalone module inside your main app, just call:
+# render_45day_checklist_module()
