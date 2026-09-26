@@ -459,5 +459,5 @@ def render_45day_checklist_module():
           st.rerun()
 
 
-# To run this as a standalone module inside your main app, just call:
-# render_45day_checklist_module()
+# Make sure this line exists somewhere in your main execution flow in app.py:
+render_45day_checklist_module()
